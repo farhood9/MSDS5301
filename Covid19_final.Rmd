@@ -1,0 +1,264 @@
+---
+title: 'Final Project 2: Reproducible Report on COVID19 Data'
+author: "F.M"
+date: "2024-02-26"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+library(sf)
+library(maps)
+library(ggrepel)
+library(sessioninfo)
+
+```
+
+
+
+
+## Objective
+
+In this project, I examine COVID-19 cases in the United States. I aim to investigate whether the number of deaths per thousand is related to the number of cases per thousand. Can we predict the number of deaths based on the number of cases?
+
+
+## DATA IMPORT
+
+Reading in the data from the four main csv files published on GitHub by Johns Hopkins University. 
+
+```{r get_jhu_data}
+## Get current data in the four files
+# they all begin the same way
+url_in <- "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_global.csv", "time_series_covid19_deaths_global.csv", 
+                "time_series_covid19_confirmed_US.csv", "time_series_covid19_deaths_US.csv")
+urls <- str_c(url_in, file_names)
+```
+
+Loading each file into R.
+
+```{r import_data, message=FALSE}
+global_cases <- read_csv(urls[1])
+global_deaths <- read_csv(urls[2])
+US_cases <- read_csv(urls[3])
+US_deaths <- read_csv(urls[4])
+```
+
+
+## Tidying the Data
+
+Although we have imported both global and US data from GitHub, our focus is on the data for the United States. So, for now, we will ignore the global cases and tidy up the US cases.
+
+
+Reshape US_cases data: use pivot_longer to convert the wide format to a long format, keeping only relevant columns (Admin2 to cases), parsing dates, and removing unnecessary columns (Lat, Long_).
+
+```{r tidy_US_cases, message=FALSE}
+US_cases <- US_cases %>%
+    pivot_longer(cols = -(UID:Combined_Key), 
+                 names_to = "date", 
+                 values_to = "cases") %>% 
+  select(Admin2:cases) %>% 
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+```
+Reshape the US_deaths data similarly to the US_cases.
+```{r tidy_US_deaths, message=FALSE}
+US_deaths <- US_deaths %>%
+    pivot_longer(cols = -(UID:Population), 
+                 names_to = "date", 
+                 values_to = "deaths") %>% 
+  select(Admin2:deaths) %>% 
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+```
+
+Combine the reshaped data of US_cases and US_deaths using a full join based on common columns.
+
+```{r merge_cases_deaths, message=FALSE}
+US <- US_cases %>% full_join(US_deaths)
+```
+
+Following the steps in the lecture, we group the data based on Province_State, Country_Region, and date. Next, we calculate the total cases and deaths while keeping the Population constant within each group. The variable deaths_per_mill is derived by dividing deaths by Population and multiplying the result by 1,000,000. Afterward, the code selects and reorders the necessary columns and removes the grouping structure.
+
+```{r us_by_state, message=FALSE}
+US_by_state <- US %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(
+    cases = sum(cases),
+    deaths = sum(deaths),
+    Population = sum(Population)  
+  ) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+
+```
+
+Create US_totals by aggregating data at the country and date level. Group the data by Country_Region and date, summarizing total cases and deaths while calculating the total population within each group. The variable deaths_per_mill is computed by dividing total deaths by the total population and multiplying the result by 1,000,000. After this, the relevant columns are selected and reordered. Finally, ungroup the data to remove the grouping structure.
+
+```{r US_totals, message=FALSE}
+US_totals <- US_by_state %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths),
+            Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+```
+
+## Visualizations
+
+### Plotting the graph of COVID-19 cases and deaths in the USA.
+
+```{r plot_us_total, message=FALSE}
+US_totals %>% 
+  filter(cases>0) %>%
+  ggplot(aes(x=date,y=cases))+
+  geom_line(aes(color ="cases"))+
+  geom_point(aes(color='cases'))+
+  geom_line(aes(y=deaths,color='deaths'))+
+  geom_point(aes(y=deaths, color="deaths"))+
+  scale_y_log10()+
+  theme(legend.position="bottom",axis.text.x=element_text(angle=90))+
+  labs(title = "COVID19 in US",y=NULL)
+
+```
+
+### Plotting the graph of COVID-19 cases and deaths in one of the US states.
+
+```{r plot_state, message=FALSE,warning=FALSE}
+state <- "New York"
+US_by_state %>% 
+  filter(Province_State == state) %>%
+  filter(cases>0) %>%
+  ggplot(aes(x=date,y=cases))+
+  geom_line(aes(color ="cases"))+
+  geom_point(aes(color='cases'))+
+  geom_line(aes(y=deaths,color='deaths'))+
+  geom_point(aes(y=deaths, color="deaths"))+
+  scale_y_log10()+
+  theme(legend.position="bottom",axis.text.x=element_text(angle=90))+
+  labs(title = str_c("COVID19 in ",state),y=NULL)
+
+```
+New columns for daily new cases and deaths are incorporated into both the US_by_state and US_totals datasets. The calculation involves subtracting the cases and deaths of the previous day from the corresponding values of the current day. This provides a concise way to track and analyze the daily changes in COVID-19 cases and deaths at both the state and total levels for the United States.
+
+```{r new_cases, message=FALSE, warning=FALSE}
+US_by_state <- US_by_state %>% 
+  mutate(new_cases = cases - lag(cases), 
+         new_deaths = deaths - lag(deaths))
+US_totals <- US_totals %>%
+  mutate(new_cases = cases - lag(cases), 
+         new_deaths = deaths - lag(deaths))
+
+```
+
+
+### Plotting the graph of new COVID-19 cases and deaths in the USA.
+
+```{r plot_us_new_cases, message=FALSE, warning=FALSE}
+US_totals %>% 
+  filter(cases>0) %>%
+  ggplot(aes(x=date,y=new_cases))+
+  geom_line(aes(color ="new_cases"))+
+  geom_point(aes(color='new_cases'))+
+  geom_line(aes(y=new_deaths,color='new_deaths'))+
+  geom_point(aes(y=new_deaths, color="new_deaths"))+
+  scale_y_log10()+
+  theme(legend.position="bottom",axis.text.x=element_text(angle=90))+
+  labs(title = "New Cases of COVID19 in the US",y=NULL)
+
+```
+
+### Plotting the heatmap of deaths per 1000 cases across US States
+
+
+```{r best_and_worst, message=FALSE}
+US_state_totals <- US_by_state %>%
+  group_by(Province_State) %>% 
+  summarize(deaths = max(deaths), cases = max(cases), 
+            population = max(Population),
+            cases_per_thou = 1000 * cases / population, 
+            deaths_per_thou = 1000 * deaths / population, 
+            deaths_per_cases = 1000 * deaths / cases) %>% 
+  filter(cases > 0, population > 0)
+```
+```{r heatmap,message=FALSE}
+#Creating the map
+us_states <- maps::map("state", plot = FALSE, fill = TRUE)
+us_states <- sf::st_as_sf(us_states)
+us_states$ID <- str_to_lower(us_states$ID)
+US_state_totals$Province_State <- str_to_lower(US_state_totals$Province_State)
+
+US_state_totals_sf <- left_join(us_states, US_state_totals, by = c("ID" = "Province_State"))
+
+#heatmap
+ggplot(data = US_state_totals_sf) +
+  geom_sf(aes(fill = deaths_per_cases)) +
+  scale_fill_viridis_c() +
+  theme_minimal() +
+  labs(title = "Heatmap of Deaths per 1000 Cases across US States",
+       fill = "Deaths per 1000 Cases") +
+  theme(legend.position = "bottom")
+```
+
+
+### Plotting the scatter plot of deaths per 1000 cases across US States
+
+
+```{r scatter_plot, message=FALSE}
+
+#Scatter Plot
+US_state_totals %>%
+  ggplot(aes(x = cases_per_thou, y = deaths_per_thou, label = Province_State)) +
+  geom_point() +
+  geom_text_repel(
+    box.padding = 0.2,
+    point.padding = 0.2,
+    force = 20,  # Increase force for better label placement
+    size = 2,    # Increase label size
+    max.overlaps = Inf
+  ) +
+  labs(title = "Scatter Plot of Deaths per 1000 Cases across US States", y = "Deaths per population", x = "Cases per population") +
+  theme_minimal()+scale_x_log10()+scale_y_log10()
+
+
+
+```
+
+
+## Linear Regression Model and Correlation Analysis
+
+
+We fitted a linear regression model to examine the relationship between deaths per thousand and cases per thousand. The summary of the model is presented below:
+
+```{r model_and_correlation, results='asis'}
+# Fit a linear regression model
+model <- lm(deaths_per_thou ~ cases_per_thou, data = US_state_totals)
+
+# Print the summary 
+summary(model)
+
+# Calculate the correlation coefficient
+correlation_coefficient <- cor(US_state_totals$deaths_per_thou, US_state_totals$cases_per_thou)
+
+# Print the correlation coefficient
+print(paste("Correlation Coefficient between Deaths per Thousand and Cases per Thousand: ", correlation_coefficient))
+
+
+```
+
+
+## Conclusion
+
+The linear regression analysis reveals a significant positive relationship between deaths and cases per thousand in U.S. COVID-19 data. The model suggests that an increase in cases per thousand corresponds to a rise in deaths per thousand, with a coefficient of 0.01133. This implies predictive potential, allowing for death estimation based on observed cases. However, the model's predictive power is confined to included variables, and it may not encompass all factors influencing mortality. Causation cannot be solely inferred from correlation.
+
+```{r session_info}
+
+session_info()
+
+```
