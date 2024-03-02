@@ -1,0 +1,232 @@
+---
+title: 'Project1: NYPD Shooting Incident Data'
+author: "F.Mogharabin"
+date: "2024-02-03"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Loading Libraries
+
+---  
+
+Loading tidyverse, lubridate and ggplot2 libraries:
+
+```{r tidyverse,echo = TRUE, eval = TRUE, results="hide",error=FALSE,warning=FALSE,message=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+```
+
+## Importing Data   
+
+---   
+
+Reading in the data from <https://data.gov/> and loading it to our variable
+
+```{r get_nypd_data, echo = TRUE, eval = TRUE, results="hide",error=FALSE,warning=FALSE,message=FALSE}
+url_nypd <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+```
+
+```{r load_data }
+nypd_shooting_cvs <- read_csv(url_nypd)
+```
+
+## Cleaning Data
+
+---
+
+Checking summary of the imported data
+
+```{r}
+summary(nypd_shooting_cvs)
+```
+
+Removing the columns that are not significant to our study from the data and converting the date and time to time objects.
+
+```{r}
+nypd_c <- nypd_shooting_cvs %>% 
+    select(-c(X_COORD_CD, Y_COORD_CD, Latitude, Longitude, INCIDENT_KEY,Lon_Lat,LOC_CLASSFCTN_DESC,LOCATION_DESC,LOC_OF_OCCUR_DESC,JURISDICTION_CODE)) %>% 
+    mutate(OCCUR_DATE = mdy(OCCUR_DATE),
+           OCCUR_TIME = hms(OCCUR_TIME))
+```
+Checking the first few row of the data
+
+```{r}
+head(nypd_c)
+```
+
+By looking at the first few rows, it seems that some values in certain fields are missing.
+Using the sapply function, we apply the is.na function to each column and then sum the results to obtain the count of NAs for each column.
+
+```{r}
+sapply(nypd_c, function(x) sum(is.na(x)))
+```
+
+
+The information regarding the perpetrator appears to be incomplete, possibly due to the cases being unsolved or still under investigation. For now, we will ignore the missing data and leave the information as it is.
+
+Checking the format of data in VIC_AGE_GROUP:
+
+```{r}
+table(nypd_c$VIC_AGE_GROUP)
+
+```
+It appears that we have a value that does not match the expected format.  We will filter it out.
+
+```{r}
+nypd_c_filtered <- nypd_c %>%
+filter(VIC_AGE_GROUP != "1022")
+```
+
+We will also update the binary value of STATISTICAL_MURDER_FLAG to 'Fatal' and 'Non-Fatal' to make it easier for the viewer to understand.
+
+```{r}
+STATISTICAL_MURDER_FLAG_factor <- as.factor(nypd_c_filtered$STATISTICAL_MURDER_FLAG)
+```
+```{r}
+nypd_c_filtered <- nypd_c_filtered %>%
+  mutate(Outcome = ifelse(STATISTICAL_MURDER_FLAG, "Fatal", "Non_Fatal"))
+
+```
+Parsing the OCCUR_DATE into Year, Month, and Weekday.
+
+```{r}
+nypd_c_filtered <- nypd_c_filtered %>%
+  mutate(OCCUR_DATE = parse_date_time(as.character(OCCUR_DATE), orders = c("mdy", "my", "ymd")),  
+         Year = year(OCCUR_DATE),
+         Month = month(OCCUR_DATE, label = TRUE),
+         Weekday = format(OCCUR_DATE, "%A"))
+```
+
+## Visualizations 
+
+---
+
+```{r}
+ggplot(nypd_c_filtered, aes(x = BORO,fill = Outcome)) +
+    geom_bar(position = "dodge") +
+    labs(x = "Boroughs", y = "Count of Incidents", title = "Shooting Incidents by Borough (2006-2022)", subtitle = "Comparison of Fatal and Non-Fatal Incidents") +
+    theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+
+```
+```{r}
+ggplot(nypd_c_filtered, aes(x = Year,fill = Outcome)) +
+  geom_bar() +
+  labs(title = "Shooting Incidents Count per Year (2006-2022)",
+       x = "Year",
+       y = "Count of Incidents")+
+      theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+
+```
+
+```{r}
+ggplot(nypd_c_filtered, aes(x = Month,fill = Outcome)) +
+  geom_bar() +
+  labs(title = "Shooting Incidents Count per Month (2006-2022)",
+       x = "Months",
+       y = "Count of Incidents")+
+  theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+
+```
+
+```{r}
+ggplot(nypd_c_filtered, aes(x = Weekday,fill = Outcome)) +
+  geom_bar() +
+  labs(title = "Shooting Incidents Count per Weekday (2006-2022)",
+       x = "Weekdays",
+       y = "Count of Incidents")+
+       theme(plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))
+
+
+```
+
+```{r}
+
+ggplot(nypd_c_filtered, aes(x = VIC_AGE_GROUP, fill = Outcome)) +
+geom_bar(position = "dodge") +
+  geom_text(stat = 'count', aes(label = after_stat(count)), position = position_dodge(width = 0.9), vjust = -0.5) +
+labs(title = "Shooting Result vs. Age Range",
+x = "Age Range",
+y = "Count of Incidents",
+fill = "Outcome") +theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+```{r}
+ggplot(nypd_c_filtered, aes(x = VIC_RACE, fill = Outcome)) +
+  geom_bar(position = "dodge") +
+  geom_text(stat = 'count', aes(label = after_stat(count), group = Outcome),
+            position = position_dodge(width = 0.9), hjust = .6, size = 3)+
+  coord_flip()+
+  labs(title = "Shooting Result vs. Victim's Race",
+       x = "Victim's Race",
+       y = "Count of Incidents",
+       fill = "Outcome") + theme(plot.title = element_text(hjust = 0.5))
+```
+
+```{r}
+ggplot(nypd_c_filtered, aes(x = VIC_SEX, fill = Outcome)) +
+  geom_bar(position = "dodge")+
+  labs(title = "Shooting Result vs. Victim's Sex",
+       x = "Victim's Sex",
+       y = "Count of Incidents",
+       fill = "Outcome") + theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+## Model
+
+---
+
+To create our model, we use features such as age, race, and sex as predictors to forecast the shooting outcome. We employ multivariate linear regression followed by logistic regression to examine how the results differ.
+
+Convert "Outcome" to a binary numeric variable. The new variable will have a value of 1 if the shooting incident resulted in a fatality ("Fatal") and 0 if the outcome was non-fatal ("Non-Fatal").
+```{r}
+nypd_c_filtered$Outcome_numeric <- as.numeric(nypd_c_filtered$Outcome == "Fatal")
+```
+### Fit a Multivariate Linear Regression 
+```{r}
+model <- lm(Outcome_numeric ~ VIC_AGE_GROUP + VIC_RACE + VIC_SEX, data = nypd_c_filtered)
+```
+Print the summary of the model
+```{r}
+summary(model)
+```
+
+### Fit a Logistic Regression
+
+```{r}
+logistic_model <- glm(Outcome_numeric ~ VIC_AGE_GROUP + VIC_RACE + VIC_SEX, data = nypd_c_filtered, family = "binomial")
+
+```
+
+Print the summary of the model
+
+```{r}
+summary(logistic_model)
+
+```
+
+
+## Analysis
+
+---
+
+  The linear regression analysis examines how age, race, and gender (predictors) are related to the outcomes of shooting events. The model suggests that age might influence the outcome of shooting incidents, whereas the impacts of gender and race are less evident. Individuals in the age groups 18-24, 25-44, 45-64, and 65+ tend to have higher average outcomes compared to those younger than 18. Being male is not strongly associated with a significant increase or decrease in average outcomes compared to being female. While some races show higher average outcomes, not all are statistically significant. The model's overall ability to explain the outcomes is limited, as indicated by a low multiple R-squared (0.009987).
+
+  Similarly, in logistic regression, age, race, and gender (predictors) are used to relate to the outcomes of shooting events. People in the age groups 18-24, 25-44, 45-64, and 65+ have higher odds of being in a shooting incident with a fatal outcome compared to those younger than 18. Being male is associated with lower odds of being in a fatal shooting incident compared to being female. The impact of race remains unclear. The model required 11 iterations to find the best fit; however, it is still not perfect.
+
+
+## Conclusion
+
+---
+
+  In studying NYPD shooting data, we checked how age, race, and gender relate to outcomes. Our visuals showed patterns over time. Age seemed linked to outcomes, but gender and race were less clear. Looking specifically at fatal incidents, age stood out again. Males had lower odds of fatal incidents, adding nuance to gender dynamics. However, our models couldn't fully explain outcomes, suggesting we need more research and factors. While we found some trends, understanding these incidents is complex. Future studies could explore additional factors and consider location influences.
+
+  This analysis has biases, such as incomplete perpetrator information, potentially leading to bias. The dataset may not cover all factors affecting incidents, like social conditions, law enforcement practices, or community dynamics. My views on gun control and the current atmosphere might have influenced interpretations, but I aimed for an impartial analysis, relying on factual evidence and statistical findings rather than pre-existing assumptions.
